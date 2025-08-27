@@ -60,11 +60,11 @@ def angular_spectrum_method(W, H, distance, wavelength, field, pixelSize, numPix
     gt_prime = fftshift(ifft2(ifftshift(GT * transfer))) # Inverse Fourier transform on: transfer function * angular spectrum
     return gt_prime
 
-object = load_and_normalize_image("/Users/wangmusi/Documents/GitHub/LIHM/pic/circle2.png") # Read the sample
+object = load_and_normalize_image("/Users/wangmusi/Documents/GitHub/LIHM/pic/stringline_padded.png") # Read the sample
 plot_image(object,"object") # Plot the object
-numPixels = 1024 # number of pixels on each axis of the sensor
-pitch_size = 1.2e-6 # sensor's pitch distance; unit: meter
-z2 = 2e-3 # the sample-sensor distance; unit: meter
+numPixels = 840 # number of pixels on each axis of the sensor
+pitch_size = 0.4e-6 # sensor's pitch distance; unit: meter
+z2 = 1e-3 # the sample-sensor distance; unit: meter
 wavelength = 525e-9
 region_length = numPixels * pitch_size # Length of sensor
 # Define the sensor grid
