@@ -1,0 +1,150 @@
+import numpy as np
+import matplotlib.pyplot as plt
+from numpy.fft import fft2, ifft2, fftshift, ifftshift
+from PIL import Image
+from skimage.metrics import structural_similarity as ssim
+
+def load_and_normalize_image(filepath):
+    # Load the image
+    image = Image.open(filepath).convert('L')  # Convert to grayscale
+    # Convert image to a NumPy array
+    grayscale_data = np.array(image, dtype=np.float32)
+    # Normalize the grayscale data to [0, 1]
+    normalized_data = (grayscale_data - grayscale_data.min()) / (grayscale_data.max() - grayscale_data.min())
+    return normalized_data
+
+def plot_image(field, title):
+    """
+    :param field: the field to be plotted
+    :param title: the title of the plot
+    """
+    data = field.astype(np.float32)
+    mn, mx = data.min(), data.max()
+    eps = 1e-12
+    data = (data - mn) / (mx - mn + eps)
+    plt.figure(figsize=(6,6))
+    im = plt.imshow(data, cmap='gray', vmin=0, vmax=1)
+    plt.colorbar(im, label="Normalized value")
+    plt.title(title); plt.axis('off'); plt.show()
+
+def Transfer_function(W, H, distance, wavelength, pixelSize, numPixels, fmax=None):
+    """
+    W, H : integer frequency indices (meshgrid), e.g. -N//2..N//2-1 (fftshifted)
+    distance : propagation distance z
+    wavelength : wavelength (same unit as pixelSize)
+    pixelSize : pixel pitch Δ (square pixels)
+    numPixels : N (square array)
+    fmax : coherence-limited cutoff (cycles/length); None -> no coherence mask
+           e.g. fmax = np.sin(theta_max)/wavelength
+    """
+    # Spatial-frequency grids (cycles / length)
+    FX = W / (pixelSize * numPixels)
+    FY = H / (pixelSize * numPixels)
+    fr2 = FX ** 2 + FY ** 2
+    # Free-space propagating circle
+    k  = 2 * np.pi / wavelength
+    arg = 1.0 - (wavelength ** 2) * fr2   # >=0: propagating, <0: evanescent
+    H_tf = np.zeros_like(FX, dtype=np.complex128)
+    prop = arg >= 0.0
+    H_tf[prop] = np.exp(1j * k * distance * np.sqrt(arg[prop]))
+    # Coherence low-pass: fr <= fmax, and not beyond 1/λ
+    if fmax is not None:
+        fmax_eff = min(float(fmax), 1.0 / wavelength)
+        mask = fr2 <= (fmax_eff**2)
+        H_tf[~mask] = 0.0
+    return H_tf
+
+
+def angular_spectrum_method(W, H, distance, wavelength, field, pixelSize, numPixels, fmax=None):
+    """
+    :param W: axis 1
+    :param H: axis 2
+    :param distance: the propagation distance
+    :param field: the field at the intial position
+    :param pixelSize: the pixel size
+    :param numPixels: the number of pixels on W and H
+    :param fmax: the coherence-limited cutoff
+    :return: the field after propagation
+    """
+    GT = fftshift(fft2(ifftshift(field))) # Angular spectrum: Fourier transforming the initial field
+    transfer = Transfer_function(W, H, distance, wavelength, pixelSize, numPixels, fmax) # Calculate the transfer function
+    gt_prime = fftshift(ifft2(ifftshift(GT * transfer))) # Inverse Fourier transform on: transfer function * angular spectrum
+    return gt_prime
+
+def IPR(W, H, wavelength, distance, pixelSize,  numPixels, Measured_amplitude, k_max, fmax=None):
+    """
+    :param W: axis 1
+    :param H: axis 2
+    :param distance: the propagation distance
+    :param pixelSize: the pixel size
+    :param numPixels: the number of pixels on W and H
+    :param Measured_amplitude: The amplitude of sensor's recorded field
+    :param k_max: The maximum iteration number
+    :return: The reconstructed sample field
+    """
+    update_phase = [] # Store every iteration's phase
+    last_field = None # Store the reconstructed sample field
+    for k in range(k_max):
+        # a) On the sensor plane
+        if k == 0: # The first iteration
+            phase0 = np.zeros(Measured_amplitude.shape) # Give the guess phase equals to 0
+            field1 = Measured_amplitude * np.exp(1j * phase0) # The guess field
+        else:
+            field1 = Measured_amplitude * np.exp(1j * update_phase[k - 1]) # The field on the sensor plane for the coming computation
+        # b) Backpropagate the field and apply constraint
+        field2 = angular_spectrum_method(W, H, -distance, wavelength, field1, pixelSize, numPixels, fmax) # Field after backpropagation
+        phase_field2 = np.angle(field2)  # phase of field2
+        amp_field2 = np.abs(field2)  # amplitude of field2
+        abso = -np.log(amp_field2 + 1e-8) # Calculate the absorption index;1e-8 to prevent 0 value
+        # Apply constraints(None-zero constraint)
+        mask = abso < 0 # Mask: when the absorption index is less than 0
+        phase_field2[mask] = 0 # Set the corresponding phase to 0
+        abso[mask] = 0 # Set the absorption as 0
+        amp_field2 = np.exp(-abso)
+        field22 = amp_field2 * np.exp(1j * phase_field2) # Field after applying the constraint
+        # c) Forward propagate the field
+        field3 = angular_spectrum_method(W, H, distance, wavelength, field22, pixelSize, numPixels, fmax) # Forward propagtion
+        phase_field3 = np.angle(field3) # Phase of field3
+        update_phase.append(phase_field3) # Input the phase to this array
+        # d) Backpropagate to get the image
+        field4 = angular_spectrum_method(W, H, -distance, wavelength, field3, pixelSize, numPixels, fmax) # Backpropagation
+        last_field = field4
+    return last_field
+
+object = load_and_normalize_image("/Users/wangmusi/Documents/GitHub/LIHM/pic/stringline_sample.png") # Read the sample
+plot_image(object,"object") # Plot the object
+numPixels = 923 # number of pixels on each axis of the sensor
+pitch_size = 1.2e-6 # sensor's pitch distance; unit: meter
+z2 = 1e-2 # the sample-sensor distance; unit: meter
+wavelength = 525e-9
+# Define the sensor grid
+x = np.arange(numPixels) - numPixels / 2 - 1
+y = np.arange(numPixels) - numPixels / 2 - 1
+W, H = np.meshgrid(x, y)
+# Define the sample property
+am = np.exp(-1.6 * object)
+ph0 = 3
+ph = ph0 * object
+field_after_object = am * np.exp(1j * ph)
+am_field_after_object = np.abs(field_after_object)
+plot_image(am_field_after_object, "Sample field") # Plot the field after sample
+# Calculate the coherence limited maximum frequency fmax
+bandwidth = 30e-9
+D = 50e-6
+z1 = 20e-2
+L_coh = 2 * np.log(2) / np.pi * (wavelength**2) / (1 * bandwidth)
+rho = 0.5 * wavelength * z1 / D
+s_angle1 = np.arccos(z2 / (z2 + L_coh))
+s_angle2 = np.arctan(rho / z2)
+s_angle = min(s_angle1, s_angle2)
+fmax = np.sin(s_angle) / wavelength
+# Acquire the hologram
+hologram_field = angular_spectrum_method(W, H, z2,wavelength, field_after_object, pitch_size, numPixels, fmax)
+hologram_amplitude = np.abs(hologram_field)
+hologram_intensity = np.abs(hologram_field) ** 2
+plot_image(hologram_intensity,  "Hologram field")
+
+# IPR reconstruction
+rec_field = IPR(W,H,wavelength,z2,pitch_size,numPixels,hologram_amplitude,50, fmax)
+am_rec = np.abs(rec_field)
+plot_image(am_rec,"rec")
