@@ -110,15 +110,15 @@ def IPR(W, H, wavelength, distance, pixelSize,  numPixels, Measured_amplitude, k
         last_field = field4
     return last_field
 
-object = load_and_normalize_image("/Users/wangmusi/Documents/GitHub/LIHM/pic/stringline_sample.png") # Read the sample
+object = load_and_normalize_image("/Users/wangmusi/Documents/GitHub/LIHM/pic/stringline_padded.png") # Read the sample
 plot_image(object,"object") # Plot the object
-numPixels = 923 # number of pixels on each axis of the sensor
-pitch_size = 1.2e-6 # sensor's pitch distance; unit: meter
-z2 = 1e-2 # the sample-sensor distance; unit: meter
+pitch_size = [0.4e-6, 1.6e-6] # 0.4e-6 is the hologram's pixel spacing and 1.6e-6 is the sensor's pitch size
+numPixels_hologram = 840 # number of pixels on each axis of the sensor
+z2 = 1e-3 # the sample-sensor distance; unit: meter
 wavelength = 525e-9
-# Define the sensor grid
-x = np.arange(numPixels) - numPixels / 2 - 1
-y = np.arange(numPixels) - numPixels / 2 - 1
+# Define the fine grid(hologram grid)
+x = np.arange(numPixels_hologram) - numPixels_hologram / 2 - 1
+y = np.arange(numPixels_hologram) - numPixels_hologram / 2 - 1
 W, H = np.meshgrid(x, y)
 # Define the sample property
 am = np.exp(-1.6 * object)
@@ -138,18 +138,59 @@ s_angle2 = np.arctan(rho / z2)
 s_angle = min(s_angle1, s_angle2)
 f1 = np.sin(s_angle) / wavelength
 # sensor geo limitation
-w = pitch_size * numPixels
+w = pitch_size[0] * numPixels_hologram
 NA = (w / 2) / (np.sqrt((w / 2) ** 2 + z2 ** 2))
 f2 = NA / wavelength
 fmax = min(f1, f2)
-
 # Acquire the hologram
-hologram_field = angular_spectrum_method(W, H, z2,wavelength, field_after_object, pitch_size, numPixels, fmax)
+hologram_field = angular_spectrum_method(W, H, z2,wavelength, field_after_object, pitch_size[0], numPixels_hologram,fmax)
 hologram_amplitude = np.abs(hologram_field)
 hologram_intensity = np.abs(hologram_field) ** 2
-plot_image(hologram_intensity,  "Hologram field")
+plot_image(hologram_amplitude,  "Hologram field")
+
+# Sample the hologram
+FX = W / (pitch_size[0] * numPixels_hologram)  # Frequency coordination
+FY = H / (pitch_size[0] * numPixels_hologram)
+Delta = pitch_size[1] # The pixel region size
+H_filter = np.sinc(FX * Delta) * np.sinc(FY * Delta)
+A = fftshift(fft2(ifftshift(hologram_intensity)))
+s = np.real(fftshift(ifft2(ifftshift(A * H_filter)))) # In case of the imaginary value
+decimation_factor = int(pitch_size[1] / pitch_size[0])
+offset = decimation_factor // 2
+sampled_field_intensity = s[offset::decimation_factor, offset::decimation_factor] # The output of the center pixel is the average value of the small rectangular area of the pixel
+am_sampled_field = np.sqrt(sampled_field_intensity)
+plot_image(am_sampled_field, "Sampled hologram")
+
+
+# Create the sensor grid
+numPixels_sensor = am_sampled_field.shape[0]
+x_sen = np.arange(numPixels_sensor) - numPixels_sensor / 2 - 1
+y_sen = np.arange(numPixels_sensor) - numPixels_sensor / 2 - 1
+W_sen, H_sen = np.meshgrid(x_sen, y_sen)
+
+# Add the dark current noise
+I = sampled_field_intensity / (sampled_field_intensity.max()) # Normalization
+L = 2 ** 8 - 1 # Assume it's 8 bit sensor
+FC = 8000 # Assume the sensor's full well capacity is 8000e-
+e_I = I * FC # In scale of electron
+e_rms = 5 # The rms of dark current
+e_dark = np.random.normal(0, e_rms, size=I.shape) # dark current distribution
+e_total = e_I + e_dark # Total electrons
+e_total = np.clip(e_total, 0.0, FC) # Considering the saturation
+dark_intensity = e_dark / FC # the intensity of dark current
+plot_image(dark_intensity, "Noise map")
+
+# Quantization noise
+I_noisy = e_total / FC
+I_cast = I_noisy * L # Cast the intensity to the quantization length
+I_cast = np.round(I_cast)
+real_signal = I_cast / L # The real signal
+plot_image(real_signal, "Hologram with noise")
 
 # IPR reconstruction
-rec_field = IPR(W,H,wavelength,z2,pitch_size,numPixels,hologram_amplitude,50, fmax)
+amp_real_signal = np.sqrt(real_signal)
+rec_field = IPR(W_sen,H_sen,wavelength,z2,pitch_size[1],numPixels_sensor,amp_real_signal,50, fmax)
 am_rec = np.abs(rec_field)
+phase_rec = np.angle(rec_field)
 plot_image(am_rec,"rec")
+plot_image(phase_rec,"phase")

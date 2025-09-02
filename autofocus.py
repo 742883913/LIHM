@@ -2,7 +2,8 @@ import numpy as np
 import matplotlib.pyplot as plt
 from numpy.fft import fft2, ifft2, fftshift, ifftshift
 from PIL import Image
-
+from scipy.ndimage import gaussian_filter, sobel
+from tqdm import tqdm
 
 def load_and_normalize_image(filepath):
     # Load the image
@@ -102,50 +103,58 @@ def IPR(W, H, wavelength, distance, pixelSize,  numPixels, Measured_amplitude, k
         last_field = field4
     return last_field
 
-object = load_and_normalize_image("/Users/wangmusi/Documents/GitHub/LIHM/pic/stringline_padded.png") # Read the sample
-plot_image(object,"object") # Plot the object
-pitch_size = [0.4e-6, 1.6e-6] # 0.4e-6 is the hologram's pixel spacing and 1.6e-6 is the sensor's pitch size
-numPixels_hologram = 840 # number of pixels on each axis of the sensor
-z2 = 1e-3 # the sample-sensor distance; unit: meter
+def focus_metric(field_obj):
+    # Convert complex field to amplitude (magnitude);
+    amp = np.abs(field_obj)
+    # Sobel gradient along x-axis
+    gx = sobel(amp, axis=0)
+    # Sobel gradient along y-axis (columns)
+    gy = sobel(amp, axis=1)
+    # Gradient magnitude image
+    grad = np.hypot(gx, gy)
+    # Use the variance of the gradient magnitude as the sharpness score
+    return grad.var()
+
+def autofocus(W,H,z_list,wavelength, field_sensor,pixel_size, num_pixel):
+    """
+    field_sensor :  Complex-valued hologram field at the sensor plane
+    z_list : 1D iterable of candidate propagation distances in meters
+    pixel_size : pixel pitch at the sensor plane in meters.
+    W, H :
+    numpixels : number of pixels on W and H
+    """
+    focus_vals = []
+    # Sweep through all candidate propagation distances
+    for z in tqdm(z_list):
+        # Back-propagate the sensor-plane field by distance z (Angular Spectrum Method)
+        field_obj = angular_spectrum_method(W,H,z,wavelength, field_sensor,pixel_size, num_pixel)
+        # Compute a scalar sharpness/contrast score for the object-plane field at this z
+        focus_vals.append(focus_metric(field_obj))
+    # Convert to a NumPy array for convenient argmax and downstream use
+    focus_vals = np.array(focus_vals)
+    # Pick the z that yields the highest focus score
+    idx = np.argmax(focus_vals)
+    return z_list[idx], focus_vals
+
+object_intensity = load_and_normalize_image(r"/Users/wangmusi/Desktop/HDR.png") # Read the image
+measured_amplitude = np.sqrt(object_intensity)
+
+# 系统参数
+pitch_size = 5.86e-6
+num_pixel = 800
+z_list = np.linspace(7e-2, 2e-1, 400) # The range to estimate the sample-sensor distance
 wavelength = 525e-9
-# Define the fine grid(hologram grid)
-x = np.arange(numPixels_hologram) - numPixels_hologram / 2 - 1
-y = np.arange(numPixels_hologram) - numPixels_hologram / 2 - 1
+
+# 构建坐标系
+x = np.arange(num_pixel) - num_pixel / 2 - 1
+y = np.arange(num_pixel) - num_pixel / 2 - 1
 W, H = np.meshgrid(x, y)
-# Define the sample property
-am = np.exp(-1.6 * object)
-ph0 = 3
-ph = ph0 * object
-field_after_object = am * np.exp(1j * ph)
-am_field_after_object = np.abs(field_after_object)
-plot_image(am_field_after_object, "Sample field") # Plot the field after sample
-# Acquire the hologram
-hologram_field = angular_spectrum_method(W, H, z2,wavelength, field_after_object, pitch_size[0], numPixels_hologram)
-hologram_amplitude = np.abs(hologram_field)
-hologram_intensity = np.abs(hologram_field) ** 2
-plot_image(hologram_amplitude,  "Hologram field")
+z2, focus_vals = autofocus(W,H,z_list,wavelength, measured_amplitude, pitch_size, num_pixel)
+print(f"最佳对焦距离：{z2:.3f} m")
 
-# Sample the hologram
-FX = W / (pitch_size[0] * numPixels_hologram)  # Frequency coordination
-FY = H / (pitch_size[0] * numPixels_hologram)
-Delta = pitch_size[1] # The pixel region size
-H_filter = np.sinc(FX * Delta) * np.sinc(FY * Delta)
-A = fftshift(fft2(ifftshift(hologram_intensity)))
-s = np.real(fftshift(ifft2(ifftshift(A * H_filter)))) # In case of the imaginary value
-decimation_factor = int(pitch_size[1] / pitch_size[0])
-offset = decimation_factor // 2
-sampled_field_intensity = s[offset::decimation_factor, offset::decimation_factor] # The output of the center pixel is the average value of the small rectangular area of the pixel
-am_sampled_field = np.sqrt(sampled_field_intensity)
-plot_image(am_sampled_field, "Sampled hologram")
-
-
-# Create the sensor grid
-numPixels_sensor = am_sampled_field.shape[0]
-x_sen = np.arange(numPixels_sensor) - numPixels_sensor / 2 - 1
-y_sen = np.arange(numPixels_sensor) - numPixels_sensor / 2 - 1
-W_sen, H_sen = np.meshgrid(x_sen, y_sen)
-
-# IPR reconstruction
-rec_field = IPR(W_sen,H_sen,wavelength,z2,pitch_size[1],numPixels_sensor,am_sampled_field,50)
+# 执行重建算法
+rec_field = IPR(W, H, wavelength, z2, pitch_size,  num_pixel, measured_amplitude, 50)
 am_rec = np.abs(rec_field)
-plot_image(am_rec,"rec")
+plot_image(am_rec, "rec")
+
+

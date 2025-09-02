@@ -110,46 +110,105 @@ def IPR(W, H, wavelength, distance, pixelSize,  numPixels, Measured_amplitude, k
         last_field = field4
     return last_field
 
-object = load_and_normalize_image("/Users/wangmusi/Documents/GitHub/LIHM/pic/stringline_sample.png") # Read the sample
-plot_image(object,"object") # Plot the object
-numPixels = 923 # number of pixels on each axis of the sensor
-pitch_size = 1.2e-6 # sensor's pitch distance; unit: meter
-z2 = 1e-2 # the sample-sensor distance; unit: meter
+
+pitch_size = [0.2e-6, 1e-6] # 0.4e-6 is the hologram's pixel spacing and 1.6e-6 is the sensor's pitch size
+numPixels_hologram = 1200 # number of pixels on each axis of the sensor
+z2 = np.arange(1, 3, 0.1) * 1e-3  # sample-sensor distance
 wavelength = 525e-9
-# Define the sensor grid
-x = np.arange(numPixels) - numPixels / 2 - 1
-y = np.arange(numPixels) - numPixels / 2 - 1
+FOV = pitch_size[0] * numPixels_hologram
+spacing_um = np.arange(6, 50, 1) * 1e-6 # the pitch size of grating sample
+# Define the fine grid(hologram grid)
+x = np.arange(numPixels_hologram) - numPixels_hologram / 2 - 1
+y = np.arange(numPixels_hologram) - numPixels_hologram / 2 - 1
 W, H = np.meshgrid(x, y)
-# Define the sample property
-am = np.exp(-1.6 * object)
-ph0 = 3
-ph = ph0 * object
-field_after_object = am * np.exp(1j * ph)
-am_field_after_object = np.abs(field_after_object)
-plot_image(am_field_after_object, "Sample field") # Plot the field after sample
-# Calculate the coherence limited maximum frequency fmax
-bandwidth = 30e-9
-D = 50e-6
-z1 = 20e-2
-L_coh = 2 * np.log(2) / np.pi * (wavelength**2) / (1 * bandwidth)
-rho = 0.5 * wavelength * z1 / D
-s_angle1 = np.arccos(z2 / (z2 + L_coh))
-s_angle2 = np.arctan(rho / z2)
-s_angle = min(s_angle1, s_angle2)
-f1 = np.sin(s_angle) / wavelength
-# sensor geo limitation
-w = pitch_size * numPixels
-NA = (w / 2) / (np.sqrt((w / 2) ** 2 + z2 ** 2))
-f2 = NA / wavelength
-fmax = min(f1, f2)
 
-# Acquire the hologram
-hologram_field = angular_spectrum_method(W, H, z2,wavelength, field_after_object, pitch_size, numPixels, fmax)
-hologram_amplitude = np.abs(hologram_field)
-hologram_intensity = np.abs(hologram_field) ** 2
-plot_image(hologram_intensity,  "Hologram field")
+for i in range (len(z2)):
+    factor = int(pitch_size[1] / pitch_size[0] + 0.5)
+    # Create the sample for test
+    img_size = numPixels_hologram
+    for n in spacing_um:
+        grating_period = int(n / pitch_size[0])
+        stripe_width = grating_period // 2
+        # Create a blank (black) image
+        img = np.zeros((img_size, img_size), dtype=np.uint8)
+        # Define the central square region
+        region_size = img_size // 4
+        start = region_size // 2 * 3
+        end = start + region_size
+        # Set the background color
+        background_level = 0
+        img = np.full((img_size, img_size), background_level, dtype=np.uint8)
+        # Draw vertical stripes in the top half
+        for x in range(start, end):
+            if ((x - start) // stripe_width) % 2 == 0:
+                img[start:start + region_size // 2, x] = 255
+        # Draw horizontal stripes in the bottom half
+        for y in range(start + region_size // 2, end):
+            if ((y - (start + region_size // 2)) // stripe_width) % 2 == 0:
+                img[y, start:end] = 255
+        object = img.astype(float) / 255.0
+        object_shape = object.shape[0]
+        # plot_image(object,"object")
 
-# IPR reconstruction
-rec_field = IPR(W,H,wavelength,z2,pitch_size,numPixels,hologram_amplitude,50, fmax)
-am_rec = np.abs(rec_field)
-plot_image(am_rec,"rec")
+        # Define the sample property
+        am = np.exp(-0.5 * object)
+        ph0 = 3
+        ph = ph0 * object
+        field_after_object = am * np.exp(1j * ph)
+        am_field_after_object = np.abs(field_after_object)
+        # plot_image(am_field_after_object, "Sample field")  # Plot the field after sample
+        # Calculate the coherence limited maximum frequency fmax
+        bandwidth = 30e-9
+        D = 50e-6
+        z1 = 20e-2
+        L_coh = 2 * np.log(2) / np.pi * (wavelength ** 2) / (1 * bandwidth)
+        rho = 0.5 * wavelength * z1 / D
+        s_angle1 = np.arccos(z2[i] / (z2[i] + L_coh))
+        s_angle2 = np.arctan(rho / z2[i])
+        s_angle = min(s_angle1, s_angle2)
+        f1 = np.sin(s_angle) / wavelength
+        # sensor geo limitation
+        w = pitch_size[0] * numPixels_hologram
+        NA = (w / 2) / (np.sqrt((w / 2) ** 2 + z2[i] ** 2))
+        f2 = NA / wavelength
+        fmax = min(f1, f2)
+        # Acquire the hologram
+        hologram_field = angular_spectrum_method(W, H, z2[i], wavelength, field_after_object, pitch_size[0],
+                                                 numPixels_hologram, fmax)
+        hologram_amplitude = np.abs(hologram_field)
+        hologram_intensity = np.abs(hologram_field) ** 2
+        # plot_image(hologram_amplitude, "Hologram field")
+
+        # Sample the hologram
+        FX = W / (pitch_size[0] * numPixels_hologram)  # Frequency coordination
+        FY = H / (pitch_size[0] * numPixels_hologram)
+        Delta = pitch_size[1]  # The pixel region size
+        H_filter = np.sinc(FX * Delta) * np.sinc(FY * Delta)
+        A = fftshift(fft2(ifftshift(hologram_intensity)))
+        s = np.real(fftshift(ifft2(ifftshift(A * H_filter))))  # In case of the imaginary value
+        decimation_factor = int(pitch_size[1] / pitch_size[0])
+        offset = decimation_factor // 2
+        sampled_field_intensity = s[offset::decimation_factor,
+                                  offset::decimation_factor]  # The output of the center pixel is the average value of the small rectangular area of the pixel
+        am_sampled_field = np.sqrt(sampled_field_intensity)
+        # plot_image(am_sampled_field, "Sampled hologram")
+
+        # Create the sensor grid
+        numPixels_sensor = am_sampled_field.shape[0]
+        x_sen = np.arange(numPixels_sensor) - numPixels_sensor / 2 - 1
+        y_sen = np.arange(numPixels_sensor) - numPixels_sensor / 2 - 1
+        W_sen, H_sen = np.meshgrid(x_sen, y_sen)
+
+        print(f"Sample-sensor distance = {z2[i]}, grating pitch = {n*1e6:.3g} um")
+
+
+        # IPR reconstruction
+        rec_field = IPR(W_sen, H_sen, wavelength, z2[i], pitch_size[1], numPixels_sensor, am_sampled_field, 50, fmax)
+        am_rec = np.abs(rec_field)
+        phase_rec = np.angle(rec_field)
+        plot_image(am_rec, "rec")
+
+        ans = input("continue with this distance? y/n ")
+        if ans.lower() not in {"y", "yes"}:
+            break
+
