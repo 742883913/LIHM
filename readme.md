@@ -14,11 +14,14 @@ The goal is to model light propagation, hologram's acquisition and recording, an
 
 ## Repository structure
 - Code
-    1. From 1-7 are all about the simulation process;
-    2. a and b are implementation details
-    3. resolution_bound.py is for investigating the reconstruction resolution
+
+    a. From 1-7 are all about the simulation process.
+
+    b. a and b are implementation details.
+    
+    c. resolution_bound.py is for investigating the reconstruction resolution.
 - pic 
 
-    Images I used for test in simulation.
+    Images used for test in simulation.
 - readme
 - Research report
